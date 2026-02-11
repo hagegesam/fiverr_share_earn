@@ -15,7 +15,7 @@ A FastAPI backend service that powers short, trackable URLs for Fiverr sellers. 
 
 ```bash
 # 1. Clone and enter the project
-cd fiverr-shortlinks
+cd fiverr_share_earn
 
 # 2. Create and activate a virtual environment
 python -m venv venv
