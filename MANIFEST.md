@@ -1,0 +1,165 @@
+# MANIFEST — Implementation Report
+
+---
+
+## What Works
+
+All three API endpoints are fully implemented and tested:
+
+- **POST /links** — Accepts a target URL, generates a 6-character short code, stores it in PostgreSQL, and returns the short link. Duplicate URLs are detected and return the existing link with a 200 status instead of 201. Invalid or missing URLs are rejected with 422.
+
+- **GET /{short_code}** — Looks up the short code, runs the simulated fraud check (100ms async delay), records the click with a timestamp, and returns a 302 redirect to the target URL. Unknown codes return 404.
+
+- **GET /stats** — Returns paginated global analytics. Each link includes total clicks, earnings ($0.05 per click computed on the fly), and a monthly breakdown of clicks grouped by YYYY-MM. Pagination is validated server-side (page >= 1, limit 1-100).
+
+- **Database** — Tables auto-create on startup. Link and Click models with UUID primary keys, unique constraints, indexes, and cascade deletes.
+
+- **Docker** — Full `docker-compose.yml` with Postgres health check and `Dockerfile` for the app. One command to run everything.
+
+- **Tests** — 16 automated test cases using pytest + FastAPI TestClient against an in-memory SQLite database. All three endpoints covered including edge cases.
+
+---
+
+## What Is Missing
+
+- **Real fraud detection** — The fraud check is a simulated 100ms delay that always returns True. No IP-based rate limiting, user agent validation, or bot detection is implemented.
+
+- **Click recording is inline, not background** — The redirect endpoint waits for the database INSERT to complete before sending the 302. A production system should use FastAPI's `BackgroundTasks` so the user gets redirected immediately while the click is recorded asynchronously.
+
+- **No authentication** — All endpoints are publicly accessible. The stats endpoint exposes all link data without any access control.
+
+- **No database migrations** — Tables are created via `create_all()` on startup. There is no Alembic setup, so schema changes require dropping and recreating tables.
+
+- **No rate limiting** — The API has no throttling. A malicious user could spam POST /links or click endpoints without restriction.
+
+- **No per-user tracking** — The system is global. There is no seller/user model, so any link is visible to anyone through /stats.
+
+- **N+1 query in stats** — `get_stats()` runs a separate COUNT and GROUP BY query per link. At scale this would need to be optimized into a single joined query or materialized view.
+
+- **Stats endpoint can clash with redirect** — If a short code happens to be "stats", the GET /stats route wins because it's registered first. Not handled explicitly.
+
+---
+
+## Database Justification
+
+**Choice: PostgreSQL**
+
+| Consideration | Why PostgreSQL |
+|---|---|
+| **Relational integrity** | Foreign key from clicks to links enforces data consistency — no orphan clicks |
+| **UUID support** | Native `UUID` type avoids the overhead of string-based IDs |
+| **Aggregation** | `to_char()`, `GROUP BY`, and `COUNT` make the monthly breakdown query straightforward |
+| **Unique constraints** | Database-level uniqueness on `short_code` and `target_url` prevents duplicates even under concurrent requests |
+| **Indexing** | B-tree index on `clicks.link_id` keeps aggregation fast as the table grows |
+| **Production-ready** | Battle-tested, widely supported, easy to scale with read replicas |
+
+**Why not other options:**
+- **Redis** — Great for caching but lacks the relational model needed for click history and monthly breakdowns
+- **MongoDB** — Would work, but the data is clearly relational (links have many clicks) and the aggregation pipeline is more complex than SQL GROUP BY
+- **SQLite** — No concurrent writes, no native UUID type, not suitable for production multi-process deployment (though we use it for testing)
+
+---
+
+## Trade-offs
+
+### Flat file structure over sub-packages
+All application code lives in `app/*.py` with no `routes/`, `services/`, or `utils/` subdirectories. This is intentional — the project has 3 endpoints and 2 tables, so a flat layout keeps cognitive overhead low and lets reviewers find everything immediately. The trade-off is that `services.py` would become unwieldy if scope grew significantly.
+
+### Random short codes over sequential
+We generate random 6-character codes and retry on collision instead of using a sequential counter encoded in base-36. This makes codes unpredictable (no enumeration attacks) but introduces a small collision risk. With ~2 billion possible codes and a 10-retry limit, the probability of failure is negligible for any reasonable number of links.
+
+### Inline click recording over background tasks
+Click recording happens synchronously in the redirect handler. This adds ~10ms of latency to the redirect but guarantees the click is persisted before the response is sent. A background task would be faster for the user but risks losing clicks if the process crashes between sending the response and completing the write.
+
+### Computed earnings over stored values
+Earnings are calculated as `total_clicks * $0.05` on every stats request rather than stored in a column. This avoids sync issues (stored value drifting from actual click count) at the cost of re-computing on each read. For the current scale this is fine; at millions of links it would warrant denormalization or caching.
+
+### Offset pagination over cursor-based
+Offset pagination (`OFFSET` / `LIMIT`) is simple and maps directly to page numbers. The trade-off is that deep pages (e.g. page 5000) become slow because the database must scan and skip all preceding rows. Cursor-based pagination would scale better but adds complexity to the API contract.
+
+### Auto-create tables over Alembic migrations
+`Base.metadata.create_all()` on startup is simple and sufficient for development. The trade-off is that schema changes (adding a column, changing a type) require manual intervention or a full table drop. For production, Alembic would be necessary.
+
+### SQLite for testing over Postgres testcontainers
+Tests use in-memory SQLite for speed and zero setup. The trade-off is that PostgreSQL-specific functions like `to_char()` need a compatibility shim (registered via SQLAlchemy's `connect` event in conftest.py). A testcontainer running real Postgres would give higher fidelity but slower tests.
+
+---
+
+## AI Usage & Prompts
+
+This project was built entirely using **Claude Code** (Anthropic's CLI agent). A design document ([DESIGN.md](DESIGN.md)) was written first, then the following prompts were executed in sequence. Each prompt targets a single concern.
+
+### Prompt 1 — Project Scaffold
+```
+Read DESIGN.md. Set up the FastAPI project with the folder structure defined there.
+Include requirements.txt with FastAPI, SQLAlchemy, psycopg2-binary, uvicorn, pytest,
+and python-dotenv.
+```
+
+### Prompt 2 — Database Layer
+```
+Create database.py with SQLAlchemy engine and session. Use environment variables
+for the connection string with python-dotenv.
+```
+
+### Prompt 3 — Models
+```
+Create the SQLAlchemy models in models.py for Link and Click as defined in DESIGN.md.
+```
+
+### Prompt 4 — Schemas
+```
+Create the Pydantic schemas in schemas.py for request/response validation.
+```
+
+### Prompt 5 — Utilities
+```
+Create utils.py with the short code generator (6 chars, alphanumeric) and the fraud
+check simulator (100ms delay, always returns True).
+```
+
+### Prompt 6 — Business Logic
+```
+Create services.py with business logic: create_link (handles duplicates),
+record_click, and get_stats (with pagination and monthly breakdown).
+```
+
+### Prompt 7 — Endpoints
+```
+Create main.py with all three endpoints (POST /links, GET /{short_code}, GET /stats)
+using the services.
+```
+
+### Prompt 8 — Docker
+```
+Create docker-compose.yml for Postgres and Dockerfile for the FastAPI app.
+```
+
+### Prompt 9 — Environment Template
+```
+Create .env.example with required environment variables.
+```
+
+### Prompt 10 — Tests
+```
+Write test_api.py with automated tests for all three endpoints. Use pytest and
+FastAPI TestClient.
+```
+
+### Prompt 11 — Documentation
+```
+Generate README.md that explains setup, architecture, testing, and AI env setup.
+```
+
+### Prompt 12 — This File
+```
+Generate MANIFEST.md file that explains what works, what is missing, DB justification,
+trade-offs, and AI usage with prompts.
+```
+
+### How AI Was Used
+
+- **DESIGN.md as context** — Every prompt starts with or references DESIGN.md, giving the AI the full specification in one file read. This reduced hallucination and kept all generated code consistent with the design.
+- **One file per prompt** — Each prompt creates exactly one file. This keeps changes small, reviewable, and easy to re-run if the output needs adjustment.
+- **No manual editing** — All code was generated by Claude Code. The only human input was writing DESIGN.md and typing the prompts above.
+- **Iterative feedback** — Between prompts, each generated file was reviewed in the IDE before moving to the next step. This caught issues early (e.g. ensuring the flat structure was followed, not a nested one).
