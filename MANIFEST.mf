@@ -153,7 +153,7 @@ Generate README.md that explains setup, architecture, testing, and AI env setup.
 
 ### Prompt 12 — This File
 ```
-Generate MANIFEST.md file that explains what works, what is missing, DB justification,
+Generate MANIFEST.mf file that explains what works, what is missing, DB justification,
 trade-offs, and AI usage with prompts.
 ```
 

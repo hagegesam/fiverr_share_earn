@@ -6,6 +6,7 @@ from fastapi.testclient import TestClient
 
 from app.database import Base, get_db
 from app.main import app
+from app import models  # Import models to ensure they're registered with Base
 
 SQLALCHEMY_DATABASE_URL = "sqlite:///:memory:"
 
@@ -34,4 +35,5 @@ def client():
     app.dependency_overrides[get_db] = override_get_db
     with TestClient(app) as c:
         yield c
+    app.dependency_overrides.clear()
     Base.metadata.drop_all(bind=engine)

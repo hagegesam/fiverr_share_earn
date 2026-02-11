@@ -142,7 +142,7 @@ fiverr-shortlinks/
 ├── .env.example          # Environment variables template
 ├── requirements.txt
 ├── README.md
-├── MANIFEST.md
+├── MANIFEST.mf
 └── DESIGN.md (this file)
 ```
 
@@ -160,7 +160,7 @@ fiverr-shortlinks/
 3. **GET /{short_code}**: Redirect with fraud check and click recording
 4. **GET /stats**: Pagination, aggregation, monthly breakdown
 5. **Tests**: Automated test suite
-6. **Documentation**: README.md and MANIFEST.md
+6. **Documentation**: README.md and MANIFEST.mf
 
 ---
 
@@ -188,4 +188,4 @@ Use these prompts in order:
 
 10. "Write test_api.py with automated tests for all three endpoints. Use pytest and FastAPI TestClient."
 
-11. "Generate README.md with setup instructions (local and Docker) and MANIFEST.md template."
+11. "Generate README.md with setup instructions (local and Docker) and MANIFEST.mf template."
